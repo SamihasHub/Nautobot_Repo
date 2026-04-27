@@ -1,4 +1,4 @@
-from nautobot.extras.jobs import Job
+from nautobot.extras.jobs import Job, register_jobs
 
 
 class ActiveDeviceReport(Job):
@@ -10,3 +10,6 @@ class ActiveDeviceReport(Job):
 
     def run(self):
         self.logger.info("Job is running successfully!")
+
+
+register_jobs(ActiveDeviceReport)
