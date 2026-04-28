@@ -45,7 +45,8 @@ class IPUtilizationReport(Job):
 
             location = prefix.location.name if prefix.location else "Global"
             status = prefix.status.name if prefix.status else "—"
-            vrf = prefix.vrf.name if prefix.vrf else "Global"
+            vrf_list = prefix.vrfs.all()
+          vrf = vrf_list.first().name if vrf_list.exists() else "Global"
             flag = ""
             css = ""
             if pct >= 80:
