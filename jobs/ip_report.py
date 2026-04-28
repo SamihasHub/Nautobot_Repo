@@ -1,46 +1,79 @@
-import os
-import pandas as pd
-
 from nautobot.apps.jobs import Job, register_jobs
 from nautobot.ipam.models import Prefix
 
+HTML_STYLE = """
+<style>
+  body { font-family: Arial, sans-serif; margin: 40px; color: #1F4E79; }
+  h1 { background: #1F4E79; color: white; padding: 16px; border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+  th { background: #1F4E79; color: white; padding: 10px; text-align: left; }
+  td { padding: 9px 10px; border-bottom: 1px solid #AABBD4; }
+  tr:nth-child(even) { background: #EBF3FB; }
+  .high { color: #843C0C; font-weight: bold; }
+  .summary { background: #E2EFDA; border-left: 5px solid #375623;
+             padding: 12px 16px; margin-top: 24px; border-radius: 4px; }
+  .footer { margin-top: 40px; font-size: 12px; color: #595959; text-align: center; }
+</style>
+"""
 
 class IPUtilizationReport(Job):
-
     class Meta:
         name = "2. IP Utilization Report"
-        description = "Prefix utilization with export"
+        description = "Generates a PDF-ready HTML report of prefix usage across all locations"
+        has_sensitive_variables = False
 
     def run(self):
-        prefixes = Prefix.objects.all()
+        prefixes = Prefix.objects.all().order_by("network")
+        if not prefixes.exists():
+            self.logger.warning("No prefixes found!")
+            return
 
-        data = []
-
-        for p in prefixes:
-            pct = round(p.get_utilization() * 100, 2)
-
-            row = {
-                "Prefix": str(p.prefix),
-                "Location": p.location.name if p.location else "Global",
-                "Status": p.status.name if p.status else "Unknown",
-                "Utilization %": pct
-            }
-
-            data.append(row)
-
+        rows = ""
+        high_count = 0
+        for prefix in prefixes:
+            utilization = prefix.get_utilization()
+            pct = round(utilization * 100, 1)
+            location = prefix.location.name if prefix.location else "Global"
+            status = prefix.status.name if prefix.status else "—"
+            vrf = prefix.vrf.name if prefix.vrf else "Global"
+            flag = ""
+            css = ""
             if pct >= 80:
-                self.logger.warning(row)
-            else:
-                self.logger.info(row)
+                flag = "⚠️ HIGH"
+                css = 'class="high"'
+                high_count += 1
+            rows += f"""
+            <tr>
+              <td {css}>{prefix.prefix}</td>
+              <td>{location}</td>
+              <td>{vrf}</td>
+              <td {css}>{pct}%</td>
+              <td>{status}</td>
+              <td {css}>{flag}</td>
+            </tr>"""
 
-        self.export(data, "ip_utilization")
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>IP Utilization Report</title>
+{HTML_STYLE}</head><body>
+<h1>🌐 IP Utilization Report — Link3 Technologies Ltd.</h1>
+<p>Total Prefixes: <strong>{prefixes.count()}</strong> |
+   High Utilization (≥80%): <strong>{high_count}</strong></p>
+<table>
+  <thead><tr>
+    <th>Prefix</th><th>Location</th><th>VRF</th>
+    <th>Utilization</th><th>Status</th><th>Flag</th>
+  </tr></thead>
+  <tbody>{rows}</tbody>
+</table>
+<div class="summary">
+  <strong>Summary:</strong> {prefixes.count()} total prefixes |
+  {high_count} prefixes above 80% utilization — action required!
+</div>
+<div class="footer">Link3 Technologies Ltd. — Technology Department | Nautobot v3.0.6</div>
+</body></html>"""
 
-    def export(self, data, name):
-        base = "/opt/nautobot/media/reports/"
-        os.makedirs(base, exist_ok=True)
-
-        df = pd.DataFrame(data)
-        df.to_excel(f"{base}{name}.xlsx", index=False)
+        self.create_file("ip_utilization_report.html", html)
+        self.logger.info(f"Report generated! {prefixes.count()} prefixes found. Download the file above.")
 
 
 register_jobs(IPUtilizationReport)
