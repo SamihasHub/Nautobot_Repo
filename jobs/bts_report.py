@@ -17,6 +17,7 @@ HTML_STYLE = """
 </style>
 """
 
+
 class BTSHealthReport(Job):
     class Meta:
         name = "4. BTS Health Report"
@@ -24,25 +25,17 @@ class BTSHealthReport(Job):
         has_sensitive_variables = False
 
     def run(self):
-        # Filter by location name containing 'BTS'
-      bts_devices = Device.objects.filter(
-        name__icontains="BTS"
-      ).order_by("location__name", "name")
-      
+        bts_devices = Device.objects.filter(
+            name__icontains="BTS"
+        ).order_by("location__name", "name")
+
         if not bts_devices.exists():
-            self.logger.warning(
-                "No devices found at BTS locations! "
-                "Listing ALL devices with their locations for reference..."
-            )
-            # Show all locations to help identify correct names
-            all_devices = Device.objects.all()[:20]
-            for d in all_devices:
-                loc = d.location.name if d.location else "No Location"
-                self.logger.info(f"Device: {d.name} | Location: {loc}")
+            self.logger.warning("No BTS devices found!")
             return
 
         rows = ""
-        active = inactive = 0
+        active = 0
+        inactive = 0
 
         for device in bts_devices:
             location = device.location.name if device.location else "—"
@@ -72,7 +65,7 @@ class BTSHealthReport(Job):
 <html><head><meta charset="UTF-8"><title>BTS Health Report</title>
 {HTML_STYLE}</head><body>
 <h1>📡 BTS Health Report — Link3 Technologies Ltd.</h1>
-<p>Total Devices at BTS Locations: <strong>{bts_devices.count()}</strong></p>
+<p>Total BTS Devices: <strong>{bts_devices.count()}</strong></p>
 <table>
   <thead><tr>
     <th>Device Name</th><th>Location</th><th>Role</th>
@@ -89,8 +82,7 @@ class BTSHealthReport(Job):
 
         self.create_file("bts_health_report.html", html)
         self.logger.info(
-            f"Report generated! {bts_devices.count()} devices at BTS locations. "
-            "Download the file above."
+            f"Report generated! {bts_devices.count()} BTS devices found. Download the file above."
         )
 
 
