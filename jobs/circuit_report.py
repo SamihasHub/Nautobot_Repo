@@ -1,39 +1,33 @@
 import os
 import pandas as pd
-from collections import Counter
 
 from nautobot.apps.jobs import Job, register_jobs
-from nautobot.circuits.models import Circuit
+from nautobot.dcim.models import Device
 
 
-class CircuitStatusReport(Job):
+class BTSHealthReport(Job):
 
     class Meta:
-        name = "3. Circuit Status Report"
-        description = "Circuit breakdown report"
+        name = "4. BTS Health Report"
+        description = "BTS device monitoring"
 
     def run(self):
-        circuits = Circuit.objects.all()
+        devices = Device.objects.filter(role__name__icontains="BTS")
 
         data = []
-        status_counter = Counter()
 
-        for c in circuits:
-            status = c.status.name if c.status else "Unknown"
-
+        for d in devices:
             row = {
-                "CID": c.cid,
-                "Provider": c.provider.name if c.provider else "Unknown",
-                "Type": c.circuit_type.name if c.circuit_type else "Unknown",
-                "Status": status
+                "Device": d.name,
+                "Location": d.location.name if d.location else "N/A",
+                "Status": d.status.name if d.status else "Unknown",
+                "BTS Type": d.custom_field_data.get("bts_type", "N/A"),
+                "Support Office": d.custom_field_data.get("support_office", "N/A"),
             }
 
             data.append(row)
-            status_counter[status] += 1
 
-        self.export(data, "circuit_report")
-
-        self.logger.info(f"Summary: {dict(status_counter)}")
+        self.export(data, "bts_health")
 
     def export(self, data, name):
         base = "/opt/nautobot/media/reports/"
@@ -42,4 +36,4 @@ class CircuitStatusReport(Job):
         pd.DataFrame(data).to_excel(f"{base}{name}.xlsx", index=False)
 
 
-register_jobs(CircuitStatusReport)
+register_jobs(BTSHealthReport)
