@@ -30,9 +30,19 @@ class IPUtilizationReport(Job):
 
         rows = ""
         high_count = 0
+
         for prefix in prefixes:
-            utilization = prefix.get_utilization()
-            pct = round(utilization * 100, 1)
+            # v3 returns a tuple (used, total) — handle both cases
+            try:
+                util_raw = prefix.get_utilization()
+                if isinstance(util_raw, tuple):
+                    used, total = util_raw
+                    pct = round((used / total * 100), 1) if total else 0.0
+                else:
+                    pct = round(float(util_raw) * 100, 1)
+            except Exception:
+                pct = 0.0
+
             location = prefix.location.name if prefix.location else "Global"
             status = prefix.status.name if prefix.status else "—"
             vrf = prefix.vrf.name if prefix.vrf else "Global"
@@ -42,6 +52,7 @@ class IPUtilizationReport(Job):
                 flag = "⚠️ HIGH"
                 css = 'class="high"'
                 high_count += 1
+
             rows += f"""
             <tr>
               <td {css}>{prefix.prefix}</td>
@@ -67,13 +78,13 @@ class IPUtilizationReport(Job):
 </table>
 <div class="summary">
   <strong>Summary:</strong> {prefixes.count()} total prefixes |
-  {high_count} prefixes above 80% utilization — action required!
+  {high_count} prefixes above 80% — action required!
 </div>
 <div class="footer">Link3 Technologies Ltd. — Technology Department | Nautobot v3.0.6</div>
 </body></html>"""
 
         self.create_file("ip_utilization_report.html", html)
-        self.logger.info(f"Report generated! {prefixes.count()} prefixes found. Download the file above.")
+        self.logger.info(f"Report generated! {prefixes.count()} prefixes. Download the file above.")
 
 
 register_jobs(IPUtilizationReport)
