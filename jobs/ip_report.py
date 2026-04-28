@@ -1,3 +1,6 @@
+import os
+import pandas as pd
+
 from nautobot.apps.jobs import Job, register_jobs
 from nautobot.ipam.models import Prefix
 
@@ -6,27 +9,38 @@ class IPUtilizationReport(Job):
 
     class Meta:
         name = "2. IP Utilization Report"
-        description = "Shows prefix usage across all locations"
-        has_sensitive_variables = False
+        description = "Prefix utilization with export"
 
     def run(self):
         prefixes = Prefix.objects.all()
-        if not prefixes.exists():
-            self.logger.warning("No prefixes found!")
-            return
-        for prefix in prefixes:
-            utilization = prefix.get_utilization()
-            pct = round(utilization * 100, 1)
-            location = prefix.location.name if prefix.location else "Global"
-            status = prefix.status.name if prefix.status else "Unknown"
+
+        data = []
+
+        for p in prefixes:
+            pct = round(p.get_utilization() * 100, 2)
+
+            row = {
+                "Prefix": str(p.prefix),
+                "Location": p.location.name if p.location else "Global",
+                "Status": p.status.name if p.status else "Unknown",
+                "Utilization %": pct
+            }
+
+            data.append(row)
+
             if pct >= 80:
-                self.logger.warning(
-                    f"[HIGH] {prefix.prefix} | {location} | {pct}% used | Status: {status}"
-                )
+                self.logger.warning(row)
             else:
-                self.logger.info(
-                    f"{prefix.prefix} | {location} | {pct}% used | Status: {status}"
-                )
+                self.logger.info(row)
+
+        self.export(data, "ip_utilization")
+
+    def export(self, data, name):
+        base = "/opt/nautobot/media/reports/"
+        os.makedirs(base, exist_ok=True)
+
+        df = pd.DataFrame(data)
+        df.to_excel(f"{base}{name}.xlsx", index=False)
 
 
 register_jobs(IPUtilizationReport)
