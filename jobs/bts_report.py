@@ -25,10 +25,10 @@ class BTSHealthReport(Job):
 
     def run(self):
         # Filter by location name containing 'BTS'
-        bts_devices = Device.objects.filter(
-            location__name__icontains="BTS"
-        ).order_by("location__name", "name")
-
+      bts_devices = Device.objects.filter(
+        name__icontains="BTS"
+      ).order_by("location__name", "name")
+      
         if not bts_devices.exists():
             self.logger.warning(
                 "No devices found at BTS locations! "
