@@ -16,6 +16,7 @@ HTML_STYLE = """
 </style>
 """
 
+
 class IPUtilizationReport(Job):
     class Meta:
         name = "2. IP Utilization Report"
@@ -32,7 +33,6 @@ class IPUtilizationReport(Job):
         high_count = 0
 
         for prefix in prefixes:
-            # v3 returns a tuple (used, total) — handle both cases
             try:
                 util_raw = prefix.get_utilization()
                 if isinstance(util_raw, tuple):
@@ -46,9 +46,10 @@ class IPUtilizationReport(Job):
             location = prefix.location.name if prefix.location else "Global"
             status = prefix.status.name if prefix.status else "—"
             vrf_list = prefix.vrfs.all()
-          vrf = vrf_list.first().name if vrf_list.exists() else "Global"
+            vrf = vrf_list.first().name if vrf_list.exists() else "Global"
             flag = ""
             css = ""
+
             if pct >= 80:
                 flag = "⚠️ HIGH"
                 css = 'class="high"'
@@ -85,7 +86,9 @@ class IPUtilizationReport(Job):
 </body></html>"""
 
         self.create_file("ip_utilization_report.html", html)
-        self.logger.info(f"Report generated! {prefixes.count()} prefixes. Download the file above.")
+        self.logger.info(
+            f"Report generated! {prefixes.count()} prefixes. Download the file above."
+        )
 
 
 register_jobs(IPUtilizationReport)
