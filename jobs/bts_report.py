@@ -20,62 +20,78 @@ HTML_STYLE = """
 class BTSHealthReport(Job):
     class Meta:
         name = "4. BTS Health Report"
-        description = "Generates a PDF-ready HTML report of all BTS devices"
+        description = "All devices at BTS locations with status and custom field data"
         has_sensitive_variables = False
 
     def run(self):
+        # Filter by location name containing 'BTS'
         bts_devices = Device.objects.filter(
-            role__name__icontains="BTS"
+            location__name__icontains="BTS"
         ).order_by("location__name", "name")
 
         if not bts_devices.exists():
-            self.logger.warning("No BTS devices found! Make sure Device Role contains 'BTS'.")
+            self.logger.warning(
+                "No devices found at BTS locations! "
+                "Listing ALL devices with their locations for reference..."
+            )
+            # Show all locations to help identify correct names
+            all_devices = Device.objects.all()[:20]
+            for d in all_devices:
+                loc = d.location.name if d.location else "No Location"
+                self.logger.info(f"Device: {d.name} | Location: {loc}")
             return
 
         rows = ""
         active = inactive = 0
+
         for device in bts_devices:
             location = device.location.name if device.location else "—"
             status = device.status.name if device.status else "Unknown"
+            role = device.role.name if device.role else "—"
             bts_type = device.custom_field_data.get("bts_type", "—")
             support_office = device.custom_field_data.get("support_office", "—")
-            commissioned = device.custom_field_data.get("commissioning_date", "—")
+
             if status == "Active":
                 active += 1
                 css = 'class="active"'
             else:
                 inactive += 1
                 css = 'class="inactive"'
+
             rows += f"""
             <tr>
               <td>{device.name}</td>
               <td>{location}</td>
+              <td>{role}</td>
               <td {css}>{status}</td>
               <td>{bts_type}</td>
               <td>{support_office}</td>
-              <td>{commissioned}</td>
             </tr>"""
 
         html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>BTS Health Report</title>
 {HTML_STYLE}</head><body>
 <h1>📡 BTS Health Report — Link3 Technologies Ltd.</h1>
-<p>Total BTS Devices: <strong>{bts_devices.count()}</strong></p>
+<p>Total Devices at BTS Locations: <strong>{bts_devices.count()}</strong></p>
 <table>
   <thead><tr>
-    <th>Device Name</th><th>Location</th><th>Status</th>
-    <th>BTS Type</th><th>Support Office</th><th>Commissioned</th>
+    <th>Device Name</th><th>Location</th><th>Role</th>
+    <th>Status</th><th>BTS Type</th><th>Support Office</th>
   </tr></thead>
   <tbody>{rows}</tbody>
 </table>
 <div class="summary">
-  <strong>Summary:</strong> Active BTS: {active} | Inactive BTS: {inactive} | Total: {active + inactive}
+  <strong>Summary:</strong> Active: {active} | Inactive: {inactive} |
+  Total: {active + inactive}
 </div>
 <div class="footer">Link3 Technologies Ltd. — Technology Department | Nautobot v3.0.6</div>
 </body></html>"""
 
         self.create_file("bts_health_report.html", html)
-        self.logger.info(f"Report generated! {bts_devices.count()} BTS devices found. Download the file above.")
+        self.logger.info(
+            f"Report generated! {bts_devices.count()} devices at BTS locations. "
+            "Download the file above."
+        )
 
 
 register_jobs(BTSHealthReport)
