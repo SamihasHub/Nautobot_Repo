@@ -12,30 +12,40 @@ class GraphDashboardReport(Job):
         has_sensitive_variables = False
 
     def run(self):
-
-        # ── 1. Devices by Role ──────────────────────────────────────────
+        # 1. Devices by Role
         role_data = {}
         for device in Device.objects.filter(status__name="Active"):
             role = device.role.name if device.role else "Unknown"
             role_data[role] = role_data.get(role, 0) + 1
 
-        # ── 2. Devices by Location (top 10) ────────────────────────────
+        # 2. Devices by Location (top 10)
         location_data = {}
         for device in Device.objects.filter(status__name="Active"):
             loc = device.location.name if device.location else "Unknown"
             location_data[loc] = location_data.get(loc, 0) + 1
-        top_locations = dict(sorted(location_data.items(), key=lambda x: x[1], reverse=True)[:10])
+        top_locations = dict(
+            sorted(location_data.items(), key=lambda x: x[1], reverse=True)[:10]
+        )
 
-        # ── 3. Circuit Status Breakdown ─────────────────────────────────
+        # 3. Circuit Status
         circuit_data = {}
         for circuit in Circuit.objects.all():
             status = circuit.status.name if circuit.status else "Unknown"
             circuit_data[status] = circuit_data.get(status, 0) + 1
 
-        # ── 4. IP Utilization Buckets ───────────────────────────────────
+        # 4. IP Utilization Buckets — fixed for v3 tuple return
         low = medium = high = critical = 0
         for prefix in Prefix.objects.all():
-            pct = round(prefix.get_utilization() * 100, 1)
+            try:
+                util_raw = prefix.get_utilization()
+                if isinstance(util_raw, tuple):
+                    used, total = util_raw
+                    pct = (used / total * 100) if total else 0.0
+                else:
+                    pct = float(util_raw) * 100
+            except Exception:
+                pct = 0.0
+
             if pct < 25:
                 low += 1
             elif pct < 50:
@@ -45,17 +55,18 @@ class GraphDashboardReport(Job):
             else:
                 critical += 1
 
-        # ── 5. BTS Active vs Inactive ───────────────────────────────────
-        bts_active = Device.objects.filter(role__name__icontains="BTS", status__name="Active").count()
-        bts_inactive = Device.objects.filter(role__name__icontains="BTS").exclude(status__name="Active").count()
+        # 5. BTS Active vs Inactive
+        bts_devices = Device.objects.filter(name__icontains="BTS")
+        bts_active = bts_devices.filter(status__name="Active").count()
+        bts_inactive = bts_devices.exclude(status__name="Active").count()
 
-        # ── 6. Devices by Status ────────────────────────────────────────
+        # 6. Devices by Status
         status_data = {}
         for device in Device.objects.all():
             s = device.status.name if device.status else "Unknown"
             status_data[s] = status_data.get(s, 0) + 1
 
-        # ── Build HTML ──────────────────────────────────────────────────
+        # KPI totals
         total_devices = Device.objects.count()
         total_circuits = Circuit.objects.count()
         total_prefixes = Prefix.objects.count()
@@ -76,17 +87,18 @@ class GraphDashboardReport(Job):
   .kpi-row {{ display: flex; gap: 16px; padding: 24px 40px 0; }}
   .kpi {{ background: white; border-radius: 8px; padding: 20px 24px;
           flex: 1; box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-          border-top: 4px solid #2E75B6; }}
-  .kpi h2 {{ font-size: 36px; color: #1F4E79; }}
+          border-top: 4px solid #2E75B6; text-align: center; }}
+  .kpi h2 {{ font-size: 40px; color: #1F4E79; }}
   .kpi p {{ font-size: 13px; color: #595959; margin-top: 4px; }}
-  .charts {{ display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
-             padding: 24px 40px; }}
+  .charts {{ display: grid; grid-template-columns: 1fr 1fr;
+             gap: 24px; padding: 24px 40px; }}
   .chart-box {{ background: white; border-radius: 8px; padding: 24px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
   .chart-box h3 {{ font-size: 15px; color: #1F4E79; margin-bottom: 16px;
                    border-bottom: 2px solid #EBF3FB; padding-bottom: 8px; }}
   .chart-wide {{ grid-column: span 2; }}
-  .footer {{ text-align: center; padding: 24px; font-size: 12px; color: #595959; }}
+  .footer {{ text-align: center; padding: 24px;
+             font-size: 12px; color: #595959; }}
 </style>
 </head>
 <body>
@@ -104,56 +116,40 @@ class GraphDashboardReport(Job):
 </div>
 
 <div class="charts">
-
-  <!-- Chart 1: Devices by Role (Doughnut) -->
   <div class="chart-box">
     <h3>🖥️ Active Devices by Role</h3>
     <canvas id="roleChart"></canvas>
   </div>
-
-  <!-- Chart 2: Circuit Status (Pie) -->
   <div class="chart-box">
     <h3>🔌 Circuit Status Breakdown</h3>
     <canvas id="circuitChart"></canvas>
   </div>
-
-  <!-- Chart 3: Top 10 Locations (Bar) -->
   <div class="chart-box chart-wide">
     <h3>📍 Top 10 Locations by Device Count</h3>
     <canvas id="locationChart"></canvas>
   </div>
-
-  <!-- Chart 4: IP Utilization Buckets (Bar) -->
   <div class="chart-box">
     <h3>🌐 IP Prefix Utilization Buckets</h3>
     <canvas id="ipChart"></canvas>
   </div>
-
-  <!-- Chart 5: BTS Active vs Inactive (Doughnut) -->
   <div class="chart-box">
     <h3>📡 BTS Health Overview</h3>
     <canvas id="btsChart"></canvas>
   </div>
-
-  <!-- Chart 6: All Devices by Status (Bar) -->
   <div class="chart-box chart-wide">
     <h3>📋 All Devices by Status</h3>
     <canvas id="statusChart"></canvas>
   </div>
-
 </div>
 
 <div class="footer">
-  Link3 Technologies Ltd. — Technology Department | Confidential — Internal Use Only
+  Link3 Technologies Ltd. — Technology Department | Confidential
 </div>
 
 <script>
-const COLORS = [
-  '#1F4E79','#2E75B6','#00B0F0','#375623','#843C0C',
-  '#70AD47','#ED7D31','#FFC000','#4472C4','#FF0000'
-];
+const COLORS = ['#1F4E79','#2E75B6','#00B0F0','#375623','#843C0C',
+                '#70AD47','#ED7D31','#FFC000','#4472C4','#FF0000'];
 
-// Chart 1 — Devices by Role
 new Chart(document.getElementById('roleChart'), {{
   type: 'doughnut',
   data: {{
@@ -164,7 +160,6 @@ new Chart(document.getElementById('roleChart'), {{
   options: {{ plugins: {{ legend: {{ position: 'right' }} }} }}
 }});
 
-// Chart 2 — Circuit Status
 new Chart(document.getElementById('circuitChart'), {{
   type: 'pie',
   data: {{
@@ -175,7 +170,6 @@ new Chart(document.getElementById('circuitChart'), {{
   options: {{ plugins: {{ legend: {{ position: 'right' }} }} }}
 }});
 
-// Chart 3 — Top 10 Locations
 new Chart(document.getElementById('locationChart'), {{
   type: 'bar',
   data: {{
@@ -186,11 +180,12 @@ new Chart(document.getElementById('locationChart'), {{
       backgroundColor: '#2E75B6'
     }}]
   }},
-  options: {{ plugins: {{ legend: {{ display: false }} }},
-    scales: {{ y: {{ beginAtZero: true }} }} }}
+  options: {{
+    plugins: {{ legend: {{ display: false }} }},
+    scales: {{ y: {{ beginAtZero: true }} }}
+  }}
 }});
 
-// Chart 4 — IP Utilization
 new Chart(document.getElementById('ipChart'), {{
   type: 'bar',
   data: {{
@@ -198,27 +193,27 @@ new Chart(document.getElementById('ipChart'), {{
     datasets: [{{
       label: 'Prefixes',
       data: [{low}, {medium}, {high}, {critical}],
-      backgroundColor: ['#70AD47', '#FFC000', '#ED7D31', '#FF0000']
+      backgroundColor: ['#70AD47','#FFC000','#ED7D31','#FF0000']
     }}]
   }},
-  options: {{ plugins: {{ legend: {{ display: false }} }},
-    scales: {{ y: {{ beginAtZero: true }} }} }}
+  options: {{
+    plugins: {{ legend: {{ display: false }} }},
+    scales: {{ y: {{ beginAtZero: true }} }}
+  }}
 }});
 
-// Chart 5 — BTS Health
 new Chart(document.getElementById('btsChart'), {{
   type: 'doughnut',
   data: {{
     labels: ['Active', 'Inactive'],
     datasets: [{{
       data: [{bts_active}, {bts_inactive}],
-      backgroundColor: ['#375623', '#843C0C']
+      backgroundColor: ['#375623','#843C0C']
     }}]
   }},
   options: {{ plugins: {{ legend: {{ position: 'right' }} }} }}
 }});
 
-// Chart 6 — Devices by Status
 new Chart(document.getElementById('statusChart'), {{
   type: 'bar',
   data: {{
@@ -229,8 +224,10 @@ new Chart(document.getElementById('statusChart'), {{
       backgroundColor: '#1F4E79'
     }}]
   }},
-  options: {{ plugins: {{ legend: {{ display: false }} }},
-    scales: {{ y: {{ beginAtZero: true }} }} }}
+  options: {{
+    plugins: {{ legend: {{ display: false }} }},
+    scales: {{ y: {{ beginAtZero: true }} }}
+  }}
 }});
 </script>
 </body></html>"""
@@ -239,7 +236,7 @@ new Chart(document.getElementById('statusChart'), {{
         self.logger.info(
             f"Dashboard generated! {total_devices} devices, "
             f"{total_circuits} circuits, {total_prefixes} prefixes. "
-            "Download the file above and open in Chrome."
+            "Download and open in Chrome."
         )
 
 
