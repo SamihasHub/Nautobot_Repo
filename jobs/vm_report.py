@@ -73,7 +73,7 @@ class VirtualMachineReport(Job):
             vcpus = "—"
             memory = "—"
             disk = "—"
-         try:
+        try:
           if vm.vcpus is not None:
            vcpus = str(vm.vcpus)
         except Exception:
@@ -89,11 +89,11 @@ class VirtualMachineReport(Job):
           except Exception:
            pass
 
-            clusters.add(cluster)
-            statuses.add(status)
-            roles.add(role)
+        clusters.add(cluster)
+        statuses.add(status)
+        roles.add(role)
 
-            rows_data.append({
+        rows_data.append({
                 "name": vm.name,
                 "cluster": cluster,
                 "status": status,
