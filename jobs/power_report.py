@@ -87,7 +87,10 @@ class PowerReport(Job):
         panels_data = []
         for panel in panels:
             location = panel.location.name if panel.location else "—"
-            feed_count = panel.powerfeeds.count()
+            try:
+             feed_count = PowerFeed.objects.filter(power_panel=panel).count()
+            except Exception:
+             feed_count = 0
             panels_data.append({
                 "name": panel.name,
                 "location": location,
