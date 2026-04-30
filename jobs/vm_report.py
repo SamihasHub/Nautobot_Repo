@@ -70,18 +70,24 @@ class VirtualMachineReport(Job):
             role = vm.role.name if vm.role else "—"
             platform = vm.platform.name if vm.platform else "—"
             ip = vm.primary_ip.address if vm.primary_ip else "—"
-            try:
-             vcpus = str(vm.vcpus) if vm.vcpus else "—"
-            except Exception:
-             vcpus = "—"
-             try:
-              memory = f"{vm.memory} MB" if vm.memory else "—"
-             except Exception:
-              memory = "—"
-              try:
-               disk = f"{vm.disk} GB" if vm.disk else "—"
-              except Exception:
-               disk = "—"
+            vcpus = "—"
+            memory = "—"
+            disk = "—"
+         try:
+          if vm.vcpus is not None:
+           vcpus = str(vm.vcpus)
+        except Exception:
+         pass
+         try:
+          if vm.memory is not None:
+           memory = f"{vm.memory} MB"
+         except Exception:
+          pass
+          try:
+           if vm.disk is not None:
+            disk = f"{vm.disk} GB"
+          except Exception:
+           pass
 
             clusters.add(cluster)
             statuses.add(status)
