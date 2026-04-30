@@ -1,5 +1,6 @@
 from nautobot.apps.jobs import Job, register_jobs
 from nautobot.dcim.models import Location, Device
+import json
 
 HTML_STYLE = """
 <style>
@@ -26,6 +27,12 @@ HTML_STYLE = """
   .kpi h2 { font-size: 36px; color: #1F4E79; }
   .kpi p { font-size: 12px; color: #595959; margin-top: 4px; }
   .content { padding: 20px 40px; }
+  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+  .chart-box { background: white; border-radius: 8px; padding: 20px;
+               box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .chart-box h3 { font-size: 14px; color: #1F4E79; margin-bottom: 12px;
+                  border-bottom: 2px solid #EBF3FB; padding-bottom: 8px; }
+  .chart-wide { grid-column: span 2; }
   table { width: 100%; border-collapse: collapse; background: white;
           border-radius: 8px; overflow: hidden;
           box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
@@ -33,13 +40,8 @@ HTML_STYLE = """
        text-align: left; font-size: 13px; }
   td { padding: 9px 12px; border-bottom: 1px solid #EBF3FB; font-size: 13px; }
   tr:hover { background: #F0F4F8; }
-  .bar-wrap { background: #EBF3FB; border-radius: 4px; height: 14px;
-              width: 100%; min-width: 80px; }
+  .bar-wrap { background: #EBF3FB; border-radius: 4px; height: 14px; min-width: 80px; }
   .bar-fill { background: #2E75B6; border-radius: 4px; height: 14px; }
-  .chart-box { background: white; border-radius: 8px; padding: 24px;
-               box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px; }
-  .chart-box h3 { font-size: 14px; color: #1F4E79; margin-bottom: 16px;
-                  border-bottom: 2px solid #EBF3FB; padding-bottom: 8px; }
   .footer { text-align: center; padding: 20px; font-size: 12px; color: #595959; }
   @media print {
     .filters { display: none !important; }
@@ -51,7 +53,7 @@ HTML_STYLE = """
 class LocationInventoryReport(Job):
     class Meta:
         name = "9. Location Inventory Report"
-        description = "All locations with device counts, hierarchy, and charts — filterable, CSV & PDF"
+        description = "All locations with device counts, hierarchy — filterable charts, CSV & PDF"
         has_sensitive_variables = False
 
     def run(self):
@@ -59,7 +61,6 @@ class LocationInventoryReport(Job):
 
         rows_data = []
         loc_types = set()
-        parents = set()
         max_devices = 0
 
         for loc in locations:
@@ -69,8 +70,6 @@ class LocationInventoryReport(Job):
             status = loc.status.name if loc.status else "Active"
 
             loc_types.add(loc_type)
-            if parent != "—":
-                parents.add(parent)
             if device_count > max_devices:
                 max_devices = device_count
 
@@ -82,19 +81,10 @@ class LocationInventoryReport(Job):
                 "devices": device_count,
             })
 
-        type_opts = "".join(f'<option value="{t}">{t}</option>' for t in sorted(loc_types))
-
-        rows_js = str(rows_data).replace("'", '"').replace('True','true').replace('False','false').replace('None','null')
-
-        # Chart data — devices by location type
-        type_counts = {}
-        for r in rows_data:
-            type_counts[r["type"]] = type_counts.get(r["type"], 0) + r["devices"]
-
-        import json
-        chart_labels = json.dumps(list(type_counts.keys()))
-        chart_values = json.dumps(list(type_counts.values()))
-
+        type_opts = "".join(
+            f'<option value="{t}">{t}</option>' for t in sorted(loc_types)
+        )
+        rows_js = json.dumps(rows_data)
         total_devices = sum(r["devices"] for r in rows_data)
 
         html = f"""<!DOCTYPE html>
@@ -114,12 +104,13 @@ class LocationInventoryReport(Job):
 
 <div class="filters">
   <label>Location Type:</label>
-  <select id="fType"><option value="">All Types</option>{type_opts}</select>
+  <select id="fType" onchange="applyFilters()">
+    <option value="">All Types</option>{type_opts}
+  </select>
   <label>Search:</label>
-  <input type="text" id="fSearch" placeholder="Location name...">
+  <input type="text" id="fSearch" oninput="applyFilters()" placeholder="Location name...">
   <label>Min Devices:</label>
-  <input type="number" id="fMinDevices" placeholder="0" style="width:80px">
-  <button class="btn-filter" onclick="applyFilters()">🔍 Filter</button>
+  <input type="number" id="fMinDevices" oninput="applyFilters()" placeholder="0" style="width:80px">
   <button class="btn-reset" onclick="resetFilters()">↺ Reset</button>
   <button class="btn-csv" onclick="downloadCSV()">⬇ CSV</button>
   <button class="btn-pdf" onclick="window.print()">🖨 PDF</button>
@@ -133,15 +124,28 @@ class LocationInventoryReport(Job):
 </div>
 
 <div class="content">
-  <div class="chart-box">
-    <h3>📊 Devices by Location Type</h3>
-    <canvas id="typeChart" height="80"></canvas>
+  <div class="charts-row">
+    <!-- Chart 1: Devices by Location Type (updates with filter) -->
+    <div class="chart-box">
+      <h3>📊 Devices by Location Type <span id="chartFilterNote" style="font-weight:normal;color:#595959;font-size:12px"></span></h3>
+      <canvas id="typeChart"></canvas>
+    </div>
+    <!-- Chart 2: Top 10 Locations by Device Count (updates with filter) -->
+    <div class="chart-box">
+      <h3>🏆 Top 10 Locations by Device Count</h3>
+      <canvas id="top10Chart"></canvas>
+    </div>
+    <!-- Chart 3: Locations count by type (updates with filter) -->
+    <div class="chart-box chart-wide">
+      <h3>📋 Location Count by Type</h3>
+      <canvas id="countChart" height="60"></canvas>
+    </div>
   </div>
 
-  <table id="locTable">
+  <table>
     <thead><tr>
       <th>Location Name</th><th>Type</th><th>Parent</th>
-      <th>Status</th><th>Device Count</th><th>Usage Bar</th>
+      <th>Status</th><th>Device Count</th><th>Usage</th>
     </tr></thead>
     <tbody id="tableBody"></tbody>
   </table>
@@ -152,23 +156,60 @@ class LocationInventoryReport(Job):
 <script>
 const ALL_DATA = {rows_js};
 const MAX_DEVICES = {max_devices};
+const COLORS = ['#1F4E79','#2E75B6','#00B0F0','#375623','#843C0C',
+                '#70AD47','#ED7D31','#FFC000','#4472C4','#FF0000'];
 
-new Chart(document.getElementById('typeChart'), {{
-  type: 'bar',
-  data: {{
-    labels: {chart_labels},
-    datasets: [{{
-      label: 'Total Devices',
-      data: {chart_values},
-      backgroundColor: '#2E75B6'
-    }}]
-  }},
-  options: {{
-    responsive: true,
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{ y: {{ beginAtZero: true }} }}
-  }}
-}});
+let typeChart, top10Chart, countChart;
+
+function buildCharts(data) {{
+  // Chart 1 — Devices by type
+  const typeMap = {{}};
+  data.forEach(r => {{ typeMap[r.type] = (typeMap[r.type] || 0) + r.devices; }});
+  const typeLabels = Object.keys(typeMap);
+  const typeVals = Object.values(typeMap);
+
+  // Chart 2 — Top 10 by device count
+  const top10 = [...data].sort((a,b) => b.devices - a.devices).slice(0,10);
+
+  // Chart 3 — Location count by type
+  const countMap = {{}};
+  data.forEach(r => {{ countMap[r.type] = (countMap[r.type] || 0) + 1; }});
+
+  if (typeChart) typeChart.destroy();
+  if (top10Chart) top10Chart.destroy();
+  if (countChart) countChart.destroy();
+
+  typeChart = new Chart(document.getElementById('typeChart'), {{
+    type: 'doughnut',
+    data: {{ labels: typeLabels, datasets: [{{ data: typeVals, backgroundColor: COLORS }}] }},
+    options: {{ plugins: {{ legend: {{ position: 'right' }} }} }}
+  }});
+
+  top10Chart = new Chart(document.getElementById('top10Chart'), {{
+    type: 'bar',
+    data: {{
+      labels: top10.map(r => r.name),
+      datasets: [{{ label: 'Devices', data: top10.map(r => r.devices), backgroundColor: '#2E75B6' }}]
+    }},
+    options: {{
+      indexAxis: 'y',
+      plugins: {{ legend: {{ display: false }} }},
+      scales: {{ x: {{ beginAtZero: true }} }}
+    }}
+  }});
+
+  countChart = new Chart(document.getElementById('countChart'), {{
+    type: 'bar',
+    data: {{
+      labels: Object.keys(countMap),
+      datasets: [{{ label: 'Locations', data: Object.values(countMap), backgroundColor: COLORS }}]
+    }},
+    options: {{
+      plugins: {{ legend: {{ display: false }} }},
+      scales: {{ y: {{ beginAtZero: true }} }}
+    }}
+  }});
+}}
 
 function renderTable(data) {{
   document.getElementById('kShowing').textContent = data.length;
@@ -180,42 +221,40 @@ function renderTable(data) {{
       <td>${{r.parent}}</td>
       <td>${{r.status}}</td>
       <td><strong>${{r.devices}}</strong></td>
-      <td>
-        <div class="bar-wrap">
-          <div class="bar-fill" style="width:${{pct}}%"></div>
-        </div>
-      </td>
+      <td><div class="bar-wrap"><div class="bar-fill" style="width:${{pct}}%"></div></div></td>
     </tr>`;
   }}).join('');
 }}
 
-function applyFilters() {{
+function getFiltered() {{
   const type = document.getElementById('fType').value;
   const search = document.getElementById('fSearch').value.toLowerCase();
   const minDev = parseInt(document.getElementById('fMinDevices').value) || 0;
-  renderTable(ALL_DATA.filter(r =>
+  return ALL_DATA.filter(r =>
     (!type || r.type === type) &&
     (!search || r.name.toLowerCase().includes(search)) &&
     (r.devices >= minDev)
-  ));
+  );
+}}
+
+function applyFilters() {{
+  const data = getFiltered();
+  renderTable(data);
+  buildCharts(data);
+  const type = document.getElementById('fType').value;
+  document.getElementById('chartFilterNote').textContent =
+    type ? `(filtered: ${{type}})` : '';
 }}
 
 function resetFilters() {{
   document.getElementById('fType').value = '';
   document.getElementById('fSearch').value = '';
   document.getElementById('fMinDevices').value = '';
-  renderTable(ALL_DATA);
+  applyFilters();
 }}
 
 function downloadCSV() {{
-  const type = document.getElementById('fType').value;
-  const search = document.getElementById('fSearch').value.toLowerCase();
-  const minDev = parseInt(document.getElementById('fMinDevices').value) || 0;
-  const data = ALL_DATA.filter(r =>
-    (!type || r.type === type) &&
-    (!search || r.name.toLowerCase().includes(search)) &&
-    (r.devices >= minDev)
-  );
+  const data = getFiltered();
   let csv = 'Location Name,Type,Parent,Status,Device Count\\n';
   data.forEach(r => {{
     csv += `"${{r.name}}","${{r.type}}","${{r.parent}}","${{r.status}}",${{r.devices}}\\n`;
@@ -226,12 +265,16 @@ function downloadCSV() {{
   a.click();
 }}
 
-renderTable(ALL_DATA);
+// Initial render
+applyFilters();
 </script>
 </body></html>"""
 
         self.create_file("location_report.html", html)
-        self.logger.info(f"Location Report generated! {len(rows_data)} locations found.")
+        self.logger.info(
+            f"Location Report generated! {len(rows_data)} locations, "
+            f"{total_devices} total devices. Download above."
+        )
 
 
 register_jobs(LocationInventoryReport)
