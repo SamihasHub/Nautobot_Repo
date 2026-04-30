@@ -71,17 +71,17 @@ class VirtualMachineReport(Job):
             platform = vm.platform.name if vm.platform else "—"
             ip = vm.primary_ip.address if vm.primary_ip else "—"
             try:
-    vcpus = str(vm.vcpus) if vm.vcpus else "—"
-except Exception:
-    vcpus = "—"
-try:
-    memory = f"{vm.memory} MB" if vm.memory else "—"
-except Exception:
-    memory = "—"
-try:
-    disk = f"{vm.disk} GB" if vm.disk else "—"
-except Exception:
-    disk = "—"
+             vcpus = str(vm.vcpus) if vm.vcpus else "—"
+            except Exception:
+             vcpus = "—"
+             try:
+              memory = f"{vm.memory} MB" if vm.memory else "—"
+             except Exception:
+              memory = "—"
+              try:
+               disk = f"{vm.disk} GB" if vm.disk else "—"
+              except Exception:
+               disk = "—"
 
             clusters.add(cluster)
             statuses.add(status)
