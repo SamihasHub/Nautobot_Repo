@@ -1,5 +1,6 @@
 from nautobot.apps.jobs import Job, register_jobs
-from nautobot.virtualization.models import VirtualMachine
+from nautobot.dcim.models import Location, Device
+import json
 
 HTML_STYLE = """
 <style>
@@ -12,7 +13,7 @@ HTML_STYLE = """
              display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .filters label { font-size: 13px; font-weight: bold; color: #1F4E79; }
   .filters select, .filters input { padding: 7px 10px; border: 1px solid #AABBD4;
-    border-radius: 4px; font-size: 13px; color: #1F4E79; }
+    border-radius: 4px; font-size: 13px; }
   .filters button { padding: 7px 16px; border: none; border-radius: 4px;
     cursor: pointer; font-size: 13px; font-weight: bold; }
   .btn-filter { background: #2E75B6; color: white; }
@@ -26,116 +27,125 @@ HTML_STYLE = """
   .kpi h2 { font-size: 36px; color: #1F4E79; }
   .kpi p { font-size: 12px; color: #595959; margin-top: 4px; }
   .content { padding: 20px 40px; }
+  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+  .chart-box { background: white; border-radius: 8px; padding: 20px;
+               box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .chart-box h3 { font-size: 14px; color: #1F4E79; margin-bottom: 12px;
+                  border-bottom: 2px solid #EBF3FB; padding-bottom: 8px; }
+  .chart-wide { grid-column: span 2; }
   table { width: 100%; border-collapse: collapse; background: white;
           border-radius: 8px; overflow: hidden;
           box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-  th { background: #1F4E79; color: white; padding: 10px 12px; text-align: left;
-       font-size: 13px; }
+  th { background: #1F4E79; color: white; padding: 10px 12px;
+       text-align: left; font-size: 13px; }
   td { padding: 9px 12px; border-bottom: 1px solid #EBF3FB; font-size: 13px; }
   tr:hover { background: #F0F4F8; }
-  .status-active { color: #375623; font-weight: bold; }
-  .status-other { color: #843C0C; font-weight: bold; }
-  .count-badge { background: #EBF3FB; color: #1F4E79; padding: 4px 10px;
-                 border-radius: 12px; font-size: 12px; font-weight: bold;
-                 display: inline-block; margin-left: 8px; }
+  .bar-wrap { background: #EBF3FB; border-radius: 4px; height: 14px; min-width: 80px; }
+  .bar-fill { background: #2E75B6; border-radius: 4px; height: 14px; }
   .footer { text-align: center; padding: 20px; font-size: 12px; color: #595959; }
   @media print {
-    .filters, .btn-csv, .btn-pdf { display: none !important; }
+    .filters { display: none !important; }
     body { background: white; }
-    .kpi-row { break-inside: avoid; }
   }
 </style>
 """
 
-class VirtualMachineReport(Job):
+class LocationInventoryReport(Job):
     class Meta:
-        name = "7. Virtual Machine Report"
-        description = "All VMs with cluster, role, platform, IP — filterable, CSV & PDF"
+        name = "9. Location Inventory Report"
+        description = "All locations with device counts, hierarchy — filterable charts, CSV & PDF"
         has_sensitive_variables = False
 
     def run(self):
-        vms = VirtualMachine.objects.all().order_by("cluster__name", "name")
-        if not vms.exists():
-            self.logger.warning("No virtual machines found in Nautobot!")
-            return
+        locations = Location.objects.all().order_by("location_type__name", "name")
 
         rows_data = []
-        clusters = set()
-        statuses = set()
-        roles = set()
+        loc_types = set()
+        max_devices = 0
 
-        for vm in vms:
-            cluster = vm.cluster.name if vm.cluster else "—"
-            status = vm.status.name if vm.status else "Unknown"
-            role = vm.role.name if vm.role else "—"
-            platform = vm.platform.name if vm.platform else "—"
-            ip = vm.primary_ip.address if vm.primary_ip else "—"
-            vcpus = str(vm.vcpus) if vm.vcpus else "—"
-            memory = f"{vm.memory_mb} MB" if vm.memory_mb else "—"
-            disk = f"{vm.disk_gb} GB" if vm.disk_gb else "—"
+        for loc in locations:
+            loc_type = loc.location_type.name if loc.location_type else "Unknown"
+            parent = loc.parent.name if loc.parent else "—"
+            device_count = Device.objects.filter(location=loc).count()
+            status = loc.status.name if loc.status else "Active"
 
-            clusters.add(cluster)
-            statuses.add(status)
-            roles.add(role)
+            loc_types.add(loc_type)
+            if device_count > max_devices:
+                max_devices = device_count
 
             rows_data.append({
-                "name": vm.name,
-                "cluster": cluster,
+                "name": loc.name,
+                "type": loc_type,
+                "parent": parent,
                 "status": status,
-                "role": role,
-                "platform": platform,
-                "ip": ip,
-                "vcpus": vcpus,
-                "memory": memory,
-                "disk": disk,
+                "devices": device_count,
             })
 
-        cluster_opts = "".join(f'<option value="{c}">{c}</option>' for c in sorted(clusters))
-        status_opts = "".join(f'<option value="{s}">{s}</option>' for s in sorted(statuses))
-        role_opts = "".join(f'<option value="{r}">{r}</option>' for r in sorted(roles))
-
-        rows_js = str(rows_data).replace("'", '"').replace('True', 'true').replace('False', 'false').replace('None', 'null')
-
-        active_count = sum(1 for r in rows_data if r["status"] == "Active")
-        cluster_count = len(clusters)
+        type_opts = "".join(
+            f'<option value="{t}">{t}</option>' for t in sorted(loc_types)
+        )
+        rows_js = json.dumps(rows_data)
+        total_devices = sum(r["devices"] for r in rows_data)
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>VM Report — Link3</title>
-{HTML_STYLE}</head>
+<head>
+<meta charset="UTF-8">
+<title>Location Inventory Report — Link3</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{HTML_STYLE}
+</head>
 <body>
+
 <div class="header">
-  <h1>🖥️ Virtual Machine Report — Link3 Technologies Ltd.</h1>
-  <p>Technology Department | Nautobot v3.0.6 | Total VMs: {len(rows_data)}</p>
+  <h1>📍 Location Inventory Report — Link3 Technologies Ltd.</h1>
+  <p>Technology Department | Nautobot v3.0.6 | Total Locations: {len(rows_data)}</p>
 </div>
 
 <div class="filters">
-  <label>Cluster:</label>
-  <select id="fCluster"><option value="">All</option>{cluster_opts}</select>
-  <label>Status:</label>
-  <select id="fStatus"><option value="">All</option>{status_opts}</select>
-  <label>Role:</label>
-  <select id="fRole"><option value="">All</option>{role_opts}</select>
+  <label>Location Type:</label>
+  <select id="fType" onchange="applyFilters()">
+    <option value="">All Types</option>{type_opts}
+  </select>
   <label>Search:</label>
-  <input type="text" id="fSearch" placeholder="VM name...">
-  <button class="btn-filter" onclick="applyFilters()">🔍 Filter</button>
+  <input type="text" id="fSearch" oninput="applyFilters()" placeholder="Location name...">
+  <label>Min Devices:</label>
+  <input type="number" id="fMinDevices" oninput="applyFilters()" placeholder="0" style="width:80px">
   <button class="btn-reset" onclick="resetFilters()">↺ Reset</button>
   <button class="btn-csv" onclick="downloadCSV()">⬇ CSV</button>
   <button class="btn-pdf" onclick="window.print()">🖨 PDF</button>
 </div>
 
 <div class="kpi-row">
-  <div class="kpi"><h2 id="kTotal">{len(rows_data)}</h2><p>Total VMs</p></div>
-  <div class="kpi"><h2 id="kActive">{active_count}</h2><p>Active VMs</p></div>
-  <div class="kpi"><h2>{cluster_count}</h2><p>Clusters</p></div>
+  <div class="kpi"><h2>{len(rows_data)}</h2><p>Total Locations</p></div>
+  <div class="kpi"><h2>{len(loc_types)}</h2><p>Location Types</p></div>
+  <div class="kpi"><h2>{total_devices}</h2><p>Total Devices</p></div>
   <div class="kpi"><h2 id="kShowing">{len(rows_data)}</h2><p>Showing</p></div>
 </div>
 
 <div class="content">
-  <table id="vmTable">
+  <div class="charts-row">
+    <!-- Chart 1: Devices by Location Type (updates with filter) -->
+    <div class="chart-box">
+      <h3>📊 Devices by Location Type <span id="chartFilterNote" style="font-weight:normal;color:#595959;font-size:12px"></span></h3>
+      <canvas id="typeChart"></canvas>
+    </div>
+    <!-- Chart 2: Top 10 Locations by Device Count (updates with filter) -->
+    <div class="chart-box">
+      <h3>🏆 Top 10 Locations by Device Count</h3>
+      <canvas id="top10Chart"></canvas>
+    </div>
+    <!-- Chart 3: Locations count by type (updates with filter) -->
+    <div class="chart-box chart-wide">
+      <h3>📋 Location Count by Type</h3>
+      <canvas id="countChart" height="60"></canvas>
+    </div>
+  </div>
+
+  <table>
     <thead><tr>
-      <th>VM Name</th><th>Cluster</th><th>Status</th><th>Role</th>
-      <th>Platform</th><th>Primary IP</th><th>vCPUs</th><th>Memory</th><th>Disk</th>
+      <th>Location Name</th><th>Type</th><th>Parent</th>
+      <th>Status</th><th>Device Count</th><th>Usage</th>
     </tr></thead>
     <tbody id="tableBody"></tbody>
   </table>
@@ -145,72 +155,126 @@ class VirtualMachineReport(Job):
 
 <script>
 const ALL_DATA = {rows_js};
+const MAX_DEVICES = {max_devices};
+const COLORS = ['#1F4E79','#2E75B6','#00B0F0','#375623','#843C0C',
+                '#70AD47','#ED7D31','#FFC000','#4472C4','#FF0000'];
+
+let typeChart, top10Chart, countChart;
+
+function buildCharts(data) {{
+  // Chart 1 — Devices by type
+  const typeMap = {{}};
+  data.forEach(r => {{ typeMap[r.type] = (typeMap[r.type] || 0) + r.devices; }});
+  const typeLabels = Object.keys(typeMap);
+  const typeVals = Object.values(typeMap);
+
+  // Chart 2 — Top 10 by device count
+  const top10 = [...data].sort((a,b) => b.devices - a.devices).slice(0,10);
+
+  // Chart 3 — Location count by type
+  const countMap = {{}};
+  data.forEach(r => {{ countMap[r.type] = (countMap[r.type] || 0) + 1; }});
+
+  if (typeChart) typeChart.destroy();
+  if (top10Chart) top10Chart.destroy();
+  if (countChart) countChart.destroy();
+
+  typeChart = new Chart(document.getElementById('typeChart'), {{
+    type: 'doughnut',
+    data: {{ labels: typeLabels, datasets: [{{ data: typeVals, backgroundColor: COLORS }}] }},
+    options: {{ plugins: {{ legend: {{ position: 'right' }} }} }}
+  }});
+
+  top10Chart = new Chart(document.getElementById('top10Chart'), {{
+    type: 'bar',
+    data: {{
+      labels: top10.map(r => r.name),
+      datasets: [{{ label: 'Devices', data: top10.map(r => r.devices), backgroundColor: '#2E75B6' }}]
+    }},
+    options: {{
+      indexAxis: 'y',
+      plugins: {{ legend: {{ display: false }} }},
+      scales: {{ x: {{ beginAtZero: true }} }}
+    }}
+  }});
+
+  countChart = new Chart(document.getElementById('countChart'), {{
+    type: 'bar',
+    data: {{
+      labels: Object.keys(countMap),
+      datasets: [{{ label: 'Locations', data: Object.values(countMap), backgroundColor: COLORS }}]
+    }},
+    options: {{
+      plugins: {{ legend: {{ display: false }} }},
+      scales: {{ y: {{ beginAtZero: true }} }}
+    }}
+  }});
+}}
 
 function renderTable(data) {{
-  const tbody = document.getElementById('tableBody');
   document.getElementById('kShowing').textContent = data.length;
-  tbody.innerHTML = data.map(r => `
-    <tr>
+  document.getElementById('tableBody').innerHTML = data.map(r => {{
+    const pct = MAX_DEVICES > 0 ? Math.round((r.devices / MAX_DEVICES) * 100) : 0;
+    return `<tr>
       <td><strong>${{r.name}}</strong></td>
-      <td>${{r.cluster}}</td>
-      <td class="${{r.status === 'Active' ? 'status-active' : 'status-other'}}">${{r.status}}</td>
-      <td>${{r.role}}</td>
-      <td>${{r.platform}}</td>
-      <td>${{r.ip}}</td>
-      <td>${{r.vcpus}}</td>
-      <td>${{r.memory}}</td>
-      <td>${{r.disk}}</td>
-    </tr>`).join('');
+      <td>${{r.type}}</td>
+      <td>${{r.parent}}</td>
+      <td>${{r.status}}</td>
+      <td><strong>${{r.devices}}</strong></td>
+      <td><div class="bar-wrap"><div class="bar-fill" style="width:${{pct}}%"></div></div></td>
+    </tr>`;
+  }}).join('');
+}}
+
+function getFiltered() {{
+  const type = document.getElementById('fType').value;
+  const search = document.getElementById('fSearch').value.toLowerCase();
+  const minDev = parseInt(document.getElementById('fMinDevices').value) || 0;
+  return ALL_DATA.filter(r =>
+    (!type || r.type === type) &&
+    (!search || r.name.toLowerCase().includes(search)) &&
+    (r.devices >= minDev)
+  );
 }}
 
 function applyFilters() {{
-  const cluster = document.getElementById('fCluster').value;
-  const status = document.getElementById('fStatus').value;
-  const role = document.getElementById('fRole').value;
-  const search = document.getElementById('fSearch').value.toLowerCase();
-  const filtered = ALL_DATA.filter(r =>
-    (!cluster || r.cluster === cluster) &&
-    (!status || r.status === status) &&
-    (!role || r.role === role) &&
-    (!search || r.name.toLowerCase().includes(search))
-  );
-  renderTable(filtered);
+  const data = getFiltered();
+  renderTable(data);
+  buildCharts(data);
+  const type = document.getElementById('fType').value;
+  document.getElementById('chartFilterNote').textContent =
+    type ? `(filtered: ${{type}})` : '';
 }}
 
 function resetFilters() {{
-  ['fCluster','fStatus','fRole'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fType').value = '';
   document.getElementById('fSearch').value = '';
-  renderTable(ALL_DATA);
+  document.getElementById('fMinDevices').value = '';
+  applyFilters();
 }}
 
 function downloadCSV() {{
-  const cluster = document.getElementById('fCluster').value;
-  const status = document.getElementById('fStatus').value;
-  const role = document.getElementById('fRole').value;
-  const search = document.getElementById('fSearch').value.toLowerCase();
-  const data = ALL_DATA.filter(r =>
-    (!cluster || r.cluster === cluster) &&
-    (!status || r.status === status) &&
-    (!role || r.role === role) &&
-    (!search || r.name.toLowerCase().includes(search))
-  );
-  let csv = 'VM Name,Cluster,Status,Role,Platform,Primary IP,vCPUs,Memory,Disk\\n';
+  const data = getFiltered();
+  let csv = 'Location Name,Type,Parent,Status,Device Count\\n';
   data.forEach(r => {{
-    csv += `"${{r.name}}","${{r.cluster}}","${{r.status}}","${{r.role}}","${{r.platform}}","${{r.ip}}","${{r.vcpus}}","${{r.memory}}","${{r.disk}}"\\n`;
+    csv += `"${{r.name}}","${{r.type}}","${{r.parent}}","${{r.status}}",${{r.devices}}\\n`;
   }});
-  const blob = new Blob([csv], {{type: 'text/csv'}});
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'link3_vm_report.csv';
+  a.href = URL.createObjectURL(new Blob([csv], {{type:'text/csv'}}));
+  a.download = 'link3_location_report.csv';
   a.click();
 }}
 
-renderTable(ALL_DATA);
+// Initial render
+applyFilters();
 </script>
 </body></html>"""
 
-        self.create_file("vm_report.html", html)
-        self.logger.info(f"VM Report generated! {len(rows_data)} VMs found. Download above.")
+        self.create_file("location_report.html", html)
+        self.logger.info(
+            f"Location Report generated! {len(rows_data)} locations, "
+            f"{total_devices} total devices. Download above."
+        )
 
 
-register_jobs(VirtualMachineReport)
+register_jobs(LocationInventoryReport)
