@@ -1,5 +1,6 @@
 from nautobot.apps.jobs import Job, register_jobs
 from nautobot.virtualization.models import VirtualMachine
+import json
 
 HTML_STYLE = """
 <style>
@@ -15,7 +16,6 @@ HTML_STYLE = """
     border-radius: 4px; font-size: 13px; color: #1F4E79; }
   .filters button { padding: 7px 16px; border: none; border-radius: 4px;
     cursor: pointer; font-size: 13px; font-weight: bold; }
-  .btn-filter { background: #2E75B6; color: white; }
   .btn-reset { background: #F2F2F2; color: #595959; }
   .btn-csv { background: #375623; color: white; }
   .btn-pdf { background: #843C0C; color: white; }
@@ -26,23 +26,25 @@ HTML_STYLE = """
   .kpi h2 { font-size: 36px; color: #1F4E79; }
   .kpi p { font-size: 12px; color: #595959; margin-top: 4px; }
   .content { padding: 20px 40px; }
+  .chart-box { background: white; border-radius: 8px; padding: 20px;
+               box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px; }
+  .chart-box h3 { font-size: 14px; color: #1F4E79; margin-bottom: 12px;
+                  border-bottom: 2px solid #EBF3FB; padding-bottom: 8px; }
+  .charts-row { display: grid; grid-template-columns: 1fr 1fr;
+                gap: 20px; margin-bottom: 24px; }
   table { width: 100%; border-collapse: collapse; background: white;
           border-radius: 8px; overflow: hidden;
           box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-  th { background: #1F4E79; color: white; padding: 10px 12px; text-align: left;
-       font-size: 13px; }
+  th { background: #1F4E79; color: white; padding: 10px 12px;
+       text-align: left; font-size: 13px; }
   td { padding: 9px 12px; border-bottom: 1px solid #EBF3FB; font-size: 13px; }
   tr:hover { background: #F0F4F8; }
   .status-active { color: #375623; font-weight: bold; }
   .status-other { color: #843C0C; font-weight: bold; }
-  .count-badge { background: #EBF3FB; color: #1F4E79; padding: 4px 10px;
-                 border-radius: 12px; font-size: 12px; font-weight: bold;
-                 display: inline-block; margin-left: 8px; }
   .footer { text-align: center; padding: 20px; font-size: 12px; color: #595959; }
   @media print {
     .filters, .btn-csv, .btn-pdf { display: none !important; }
     body { background: white; }
-    .kpi-row { break-inside: avoid; }
   }
 </style>
 """
@@ -69,31 +71,33 @@ class VirtualMachineReport(Job):
             status = vm.status.name if vm.status else "Unknown"
             role = vm.role.name if vm.role else "—"
             platform = vm.platform.name if vm.platform else "—"
-            ip = vm.primary_ip.address if vm.primary_ip else "—"
+            ip = str(vm.primary_ip.address) if vm.primary_ip else "—"
+
             vcpus = "—"
             memory = "—"
             disk = "—"
-        try:
-          if vm.vcpus is not None:
-           vcpus = str(vm.vcpus)
-        except Exception:
-         pass
-         try:
-          if vm.memory is not None:
-           memory = f"{vm.memory} MB"
-         except Exception:
-          pass
-          try:
-           if vm.disk is not None:
-            disk = f"{vm.disk} GB"
-          except Exception:
-           pass
 
-        clusters.add(cluster)
-        statuses.add(status)
-        roles.add(role)
+            try:
+                if vm.vcpus is not None:
+                    vcpus = str(vm.vcpus)
+            except Exception:
+                pass
+            try:
+                if vm.memory is not None:
+                    memory = f"{vm.memory} MB"
+            except Exception:
+                pass
+            try:
+                if vm.disk is not None:
+                    disk = f"{vm.disk} GB"
+            except Exception:
+                pass
 
-        rows_data.append({
+            clusters.add(cluster)
+            statuses.add(status)
+            roles.add(role)
+
+            rows_data.append({
                 "name": vm.name,
                 "cluster": cluster,
                 "status": status,
@@ -105,20 +109,50 @@ class VirtualMachineReport(Job):
                 "disk": disk,
             })
 
-        cluster_opts = "".join(f'<option value="{c}">{c}</option>' for c in sorted(clusters))
-        status_opts = "".join(f'<option value="{s}">{s}</option>' for s in sorted(statuses))
-        role_opts = "".join(f'<option value="{r}">{r}</option>' for r in sorted(roles))
+        # Build chart data
+        cluster_counts = {}
+        status_counts = {}
+        role_counts = {}
+        for r in rows_data:
+            cluster_counts[r["cluster"]] = cluster_counts.get(r["cluster"], 0) + 1
+            status_counts[r["status"]] = status_counts.get(r["status"], 0) + 1
+            role_counts[r["role"]] = role_counts.get(r["role"], 0) + 1
 
-        rows_js = str(rows_data).replace("'", '"').replace('True', 'true').replace('False', 'false').replace('None', 'null')
+        top10_clusters = dict(
+            sorted(cluster_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        )
+
+        cluster_opts = "".join(
+            f'<option value="{c}">{c}</option>' for c in sorted(clusters)
+        )
+        status_opts = "".join(
+            f'<option value="{s}">{s}</option>' for s in sorted(statuses)
+        )
+        role_opts = "".join(
+            f'<option value="{r}">{r}</option>' for r in sorted(roles)
+        )
 
         active_count = sum(1 for r in rows_data if r["status"] == "Active")
-        cluster_count = len(clusters)
+
+        # Use json.dumps for safe JS embedding
+        rows_js = json.dumps(rows_data, ensure_ascii=False)
+        status_labels = json.dumps(list(status_counts.keys()))
+        status_vals = json.dumps(list(status_counts.values()))
+        role_labels = json.dumps(list(role_counts.keys()))
+        role_vals = json.dumps(list(role_counts.values()))
+        cluster_labels = json.dumps(list(top10_clusters.keys()))
+        cluster_vals = json.dumps(list(top10_clusters.values()))
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>VM Report — Link3</title>
-{HTML_STYLE}</head>
+<head>
+<meta charset="UTF-8">
+<title>VM Report — Link3</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{HTML_STYLE}
+</head>
 <body>
+
 <div class="header">
   <h1>🖥️ Virtual Machine Report — Link3 Technologies Ltd.</h1>
   <p>Technology Department | Nautobot v3.0.6 | Total VMs: {len(rows_data)}</p>
@@ -126,28 +160,48 @@ class VirtualMachineReport(Job):
 
 <div class="filters">
   <label>Cluster:</label>
-  <select id="fCluster"><option value="">All</option>{cluster_opts}</select>
+  <select id="fCluster" onchange="applyFilters()">
+    <option value="">All</option>{cluster_opts}
+  </select>
   <label>Status:</label>
-  <select id="fStatus"><option value="">All</option>{status_opts}</select>
+  <select id="fStatus" onchange="applyFilters()">
+    <option value="">All</option>{status_opts}
+  </select>
   <label>Role:</label>
-  <select id="fRole"><option value="">All</option>{role_opts}</select>
+  <select id="fRole" onchange="applyFilters()">
+    <option value="">All</option>{role_opts}
+  </select>
   <label>Search:</label>
-  <input type="text" id="fSearch" placeholder="VM name...">
-  <button class="btn-filter" onclick="applyFilters()">🔍 Filter</button>
+  <input type="text" id="fSearch" oninput="applyFilters()" placeholder="VM name...">
   <button class="btn-reset" onclick="resetFilters()">↺ Reset</button>
   <button class="btn-csv" onclick="downloadCSV()">⬇ CSV</button>
   <button class="btn-pdf" onclick="window.print()">🖨 PDF</button>
 </div>
 
 <div class="kpi-row">
-  <div class="kpi"><h2 id="kTotal">{len(rows_data)}</h2><p>Total VMs</p></div>
-  <div class="kpi"><h2 id="kActive">{active_count}</h2><p>Active VMs</p></div>
-  <div class="kpi"><h2>{cluster_count}</h2><p>Clusters</p></div>
+  <div class="kpi"><h2>{len(rows_data)}</h2><p>Total VMs</p></div>
+  <div class="kpi"><h2>{active_count}</h2><p>Active VMs</p></div>
+  <div class="kpi"><h2>{len(clusters)}</h2><p>Clusters</p></div>
   <div class="kpi"><h2 id="kShowing">{len(rows_data)}</h2><p>Showing</p></div>
 </div>
 
 <div class="content">
-  <table id="vmTable">
+  <div class="charts-row">
+    <div class="chart-box">
+      <h3>📊 VMs by Status</h3>
+      <canvas id="statusChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>🎭 VMs by Role</h3>
+      <canvas id="roleChart"></canvas>
+    </div>
+    <div class="chart-box" style="grid-column:span 2">
+      <h3>🏢 Top 10 Clusters by VM Count</h3>
+      <canvas id="clusterChart" height="80"></canvas>
+    </div>
+  </div>
+
+  <table>
     <thead><tr>
       <th>VM Name</th><th>Cluster</th><th>Status</th><th>Role</th>
       <th>Platform</th><th>Primary IP</th><th>vCPUs</th><th>Memory</th><th>Disk</th>
@@ -156,15 +210,56 @@ class VirtualMachineReport(Job):
   </table>
 </div>
 
-<div class="footer">Link3 Technologies Ltd. — Technology Department | Confidential</div>
+<div class="footer">
+  Link3 Technologies Ltd. — Technology Department | Confidential
+</div>
 
 <script>
 const ALL_DATA = {rows_js};
+const COLORS = ['#1F4E79','#2E75B6','#00B0F0','#375623','#843C0C',
+                '#70AD47','#ED7D31','#FFC000','#4472C4','#FF0000'];
+
+// Static charts (full dataset)
+new Chart(document.getElementById('statusChart'), {{
+  type: 'doughnut',
+  data: {{ labels: {status_labels}, datasets: [{{ data: {status_vals}, backgroundColor: COLORS }}] }},
+  options: {{ plugins: {{ legend: {{ position: 'right' }} }} }}
+}});
+
+new Chart(document.getElementById('roleChart'), {{
+  type: 'doughnut',
+  data: {{ labels: {role_labels}, datasets: [{{ data: {role_vals}, backgroundColor: COLORS }}] }},
+  options: {{ plugins: {{ legend: {{ position: 'right' }} }} }}
+}});
+
+new Chart(document.getElementById('clusterChart'), {{
+  type: 'bar',
+  data: {{
+    labels: {cluster_labels},
+    datasets: [{{ label: 'VMs', data: {cluster_vals}, backgroundColor: '#2E75B6' }}]
+  }},
+  options: {{
+    plugins: {{ legend: {{ display: false }} }},
+    scales: {{ y: {{ beginAtZero: true }} }}
+  }}
+}});
+
+function getFiltered() {{
+  const cluster = document.getElementById('fCluster').value;
+  const status = document.getElementById('fStatus').value;
+  const role = document.getElementById('fRole').value;
+  const search = document.getElementById('fSearch').value.toLowerCase();
+  return ALL_DATA.filter(r =>
+    (!cluster || r.cluster === cluster) &&
+    (!status || r.status === status) &&
+    (!role || r.role === role) &&
+    (!search || r.name.toLowerCase().includes(search))
+  );
+}}
 
 function renderTable(data) {{
-  const tbody = document.getElementById('tableBody');
   document.getElementById('kShowing').textContent = data.length;
-  tbody.innerHTML = data.map(r => `
+  document.getElementById('tableBody').innerHTML = data.map(r => `
     <tr>
       <td><strong>${{r.name}}</strong></td>
       <td>${{r.cluster}}</td>
@@ -178,44 +273,24 @@ function renderTable(data) {{
     </tr>`).join('');
 }}
 
-function applyFilters() {{
-  const cluster = document.getElementById('fCluster').value;
-  const status = document.getElementById('fStatus').value;
-  const role = document.getElementById('fRole').value;
-  const search = document.getElementById('fSearch').value.toLowerCase();
-  const filtered = ALL_DATA.filter(r =>
-    (!cluster || r.cluster === cluster) &&
-    (!status || r.status === status) &&
-    (!role || r.role === role) &&
-    (!search || r.name.toLowerCase().includes(search))
-  );
-  renderTable(filtered);
-}}
+function applyFilters() {{ renderTable(getFiltered()); }}
 
 function resetFilters() {{
-  ['fCluster','fStatus','fRole'].forEach(id => document.getElementById(id).value = '');
+  ['fCluster','fStatus','fRole'].forEach(id =>
+    document.getElementById(id).value = '');
   document.getElementById('fSearch').value = '';
-  renderTable(ALL_DATA);
+  applyFilters();
 }}
 
 function downloadCSV() {{
-  const cluster = document.getElementById('fCluster').value;
-  const status = document.getElementById('fStatus').value;
-  const role = document.getElementById('fRole').value;
-  const search = document.getElementById('fSearch').value.toLowerCase();
-  const data = ALL_DATA.filter(r =>
-    (!cluster || r.cluster === cluster) &&
-    (!status || r.status === status) &&
-    (!role || r.role === role) &&
-    (!search || r.name.toLowerCase().includes(search))
-  );
+  const data = getFiltered();
   let csv = 'VM Name,Cluster,Status,Role,Platform,Primary IP,vCPUs,Memory,Disk\\n';
   data.forEach(r => {{
-    csv += `"${{r.name}}","${{r.cluster}}","${{r.status}}","${{r.role}}","${{r.platform}}","${{r.ip}}","${{r.vcpus}}","${{r.memory}}","${{r.disk}}"\\n`;
+    csv += `"${{r.name}}","${{r.cluster}}","${{r.status}}","${{r.role}}",` +
+           `"${{r.platform}}","${{r.ip}}","${{r.vcpus}}","${{r.memory}}","${{r.disk}}"\\n`;
   }});
-  const blob = new Blob([csv], {{type: 'text/csv'}});
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
+  a.href = URL.createObjectURL(new Blob([csv], {{type:'text/csv'}}));
   a.download = 'link3_vm_report.csv';
   a.click();
 }}
@@ -225,7 +300,9 @@ renderTable(ALL_DATA);
 </body></html>"""
 
         self.create_file("vm_report.html", html)
-        self.logger.info(f"VM Report generated! {len(rows_data)} VMs found. Download above.")
+        self.logger.info(
+            f"VM Report generated! {len(rows_data)} VMs found. Download above."
+        )
 
 
 register_jobs(VirtualMachineReport)
