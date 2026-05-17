@@ -4,11 +4,9 @@ from nautobot.apps.jobs import Job, FileVar
 from nautobot.dcim.models import Device
 from nautobot.ipam.models import IPAddress
 
-# This grouping registers the name under your Job overview tab
 name = "Network Provisioning Utilities"
 
 class AssignPrimaryIPs(Job):
-    # Interactive UI file picker element 
     csv_file = FileVar(
         description="Upload your 'Uploaded_Olts_Interface_IP_Binding.csv' file here."
     )
@@ -19,12 +17,10 @@ class AssignPrimaryIPs(Job):
         has_sensitive_variables = False
 
     def run(self, csv_file):
-        # Read and decode the CSV data stream
         file_data = csv_file.read().decode('utf-8-sig')
         reader = csv.DictReader(StringIO(file_data))
         
         self.logger.info("Initializing automated primary IP assignment mapping process...")
-
         success_count = 0
         error_count = 0
 
@@ -33,10 +29,8 @@ class AssignPrimaryIPs(Job):
             ip_host = row.get('ip_address__host')
             
             if not device_name or not ip_host:
-                self.logger.warning(f"Skipping blank or invalid layout row: {row}")
                 continue
 
-            # 1. Look up the device object in the database
             try:
                 device = Device.objects.get(name=device_name)
             except Device.DoesNotExist:
@@ -44,7 +38,6 @@ class AssignPrimaryIPs(Job):
                 error_count += 1
                 continue
 
-            # 2. Look up the IP Address object via the correct 'address' parameter schema
             try:
                 ip_string = f"{ip_host.strip()}/32"
                 ip_obj = IPAddress.objects.get(address=ip_string)
@@ -53,7 +46,6 @@ class AssignPrimaryIPs(Job):
                 error_count += 1
                 continue
 
-            # 3. Map the relationship and save natively
             try:
                 device.primary_ip4 = ip_obj
                 device.save()
@@ -63,7 +55,4 @@ class AssignPrimaryIPs(Job):
                 self.logger.error(f"⚠️ Failed database write execution for {device_name}: {str(e)}")
                 error_count += 1
 
-        self.logger.info(f"🎉 Job Finished. Status Summary -> Successful mappings: {success_count} | Errors skipped: {error_count}")
-
-# Essential for Git repository discovery hook mapping registration
-jobs = [AssignPrimaryIPs]
+        self.logger.info(f"🎉 Job Finished. Success updates: {success_count} | Errors skipped: {error_count}")
