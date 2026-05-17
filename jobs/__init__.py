@@ -20,5 +20,5 @@ register_jobs(
     VirtualMachineReport,
     PowerReport,
     LocationInventoryReport,
-    AssignPrimaryIPs,
+    AssignPrimaryIPs
 )
