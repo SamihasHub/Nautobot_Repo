@@ -8,7 +8,7 @@ from .live_dashboard import LiveDashboardGenerator
 from .vm_report import VirtualMachineReport
 from .power_report import PowerReport
 from .location_report import LocationInventoryReport
-from .ip_assignment_jobs import AssignPrimaryIPs
+from .ip_assignment_job import AssignPrimaryIPs
 
 register_jobs(
     ActiveDeviceReport,
