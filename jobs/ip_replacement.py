@@ -1,5 +1,6 @@
 import csv
 from io import StringIO
+from django.db import connection  # Critical for raw SQL database bypass
 from nautobot.apps.jobs import Job, FileVar
 from nautobot.dcim.models import Device, Interface
 from nautobot.ipam.models import IPAddress
@@ -9,19 +10,19 @@ name = "Network Provisioning Utilities"
 
 class IpReplacement(Job):
     csv_file = FileVar(
-        description="Upload your custom CSV file here. The script will force the exact mask (/32 or /24) defined per row."
+        description="Upload your custom CSV file here. The script will force-write the exact mask (/32 or /24) defined per row via raw SQL statements."
     )
 
     class Meta:
         name = "Align IP Masks Selectively & Set Primary"
-        description = "Forces masks from /24 to /32 via direct database query updates if specified in the CSV row."
+        description = "Bypasses Nautobot constraints using raw SQL execution statements to rewrite masks from /24 to /32 instantly in the database."
         has_sensitive_variables = False
 
     def run(self, csv_file):
         file_data = csv_file.read().decode('utf-8-sig')
         reader = csv.DictReader(StringIO(file_data))
         
-        self.logger.info("Initializing direct database mask alignment execution...")
+        self.logger.info("Initializing raw backend SQL mask modification execution...")
 
         status_active = Status.objects.get(name="Active")
         success_count = 0
@@ -47,7 +48,7 @@ class IpReplacement(Job):
 
             target_address = f"{ip_host}/{target_mask}"
 
-            # 1. Fetch the Device
+            # 1. Fetch the target device
             try:
                 device = Device.objects.get(name=device_name)
             except Device.DoesNotExist:
@@ -62,10 +63,7 @@ class IpReplacement(Job):
                 defaults={'type': 'virtual', 'status': status_active}
             )
 
-            # 3. Handle Direct Database IP Mask Alignment
-            ip_obj = None
-            
-            # Look for ANY existing IP address matching this host part (regardless of its current mask)
+            # 3. Use raw SQL execution to force change mask lengths in the backend table
             existing_ips = IPAddress.objects.filter(address__startswith=f"{ip_host}/")
             
             if existing_ips.exists():
@@ -73,12 +71,20 @@ class IpReplacement(Job):
                 old_address = ip_obj.address
                 
                 if old_address != target_address:
-                    # FORCE a direct database SQL update call to rewrite the mask string explicitly
-                    IPAddress.objects.filter(id=ip_obj.id).update(address=target_address)
-                    
-                    # Refresh the local object from the database to reflect the update
-                    ip_obj.refresh_from_db()
-                    self.logger.warning(f"⚡ Forced Database Mask Update for {ip_host}: Changed {old_address} ➔ {target_address}")
+                    try:
+                        # Establish a direct cursor connection to the PostgreSQL database engine
+                        with connection.cursor() as cursor:
+                            # Update the absolute value inside the database column bypassing the application layer
+                            cursor.execute(
+                                "UPDATE ipam_ipaddress SET address = %s WHERE id = %s",
+                                [target_address, str(ip_obj.id)]
+                            )
+                        
+                        # Reload object state directly from database transaction records
+                        ip_obj.refresh_from_db()
+                        self.logger.warning(f"⚡ Direct SQL Mask Override: Successfully rewrote {old_address} ➔ {ip_obj.address}")
+                    except Exception as sql_err:
+                        self.logger.error(f"⚠️ Raw SQL execution failed for {ip_host}: {str(sql_err)}")
             else:
                 # If it doesn't exist anywhere, create it fresh
                 ip_obj = IPAddress.objects.create(
@@ -87,7 +93,7 @@ class IpReplacement(Job):
                 )
                 self.logger.info(f"✨ Created new IPAM record: {target_address}")
 
-            # 4. Attach the IP to the interface component
+            # 4. Bind the IP address to the interface component
             try:
                 ip_obj.assigned_object = interface_obj
                 ip_obj.save()
@@ -98,10 +104,10 @@ class IpReplacement(Job):
             try:
                 device.primary_ip4 = ip_obj
                 device.save()
-                self.logger.success(f"✅ Successfully configured {device_name} with address {target_address}")
+                self.logger.success(f"✅ Configured {device_name} with address {target_address}")
                 success_count += 1
             except Exception as e:
-                self.logger.error(f"❌ Primary assignment update error for {device_name}: {str(e)}")
+                self.logger.error(f"❌ Primary assignment error for {device_name}: {str(e)}")
                 error_count += 1
 
-        self.logger.info(f"🎉 Job Complete! Successfully updated: {success_count} devices | Errors: {error_count}")
+        self.logger.info(f"🎉 Job Finished! Successfully updated: {success_count} entries | Errors: {error_count}")
