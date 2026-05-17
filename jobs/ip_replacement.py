@@ -7,8 +7,8 @@ from nautobot.extras.models import Status
 
 name = "Network Provisioning Utilities"
 
-class AssignPrimaryIPs(Job):
-    # This exposes an interactive file upload box in your Nautobot browser UI
+# Changed from AssignPrimaryIPs to IpReplacement
+class IpReplacement(Job):
     csv_file = FileVar(
         description="Upload your 'Infra_Routers_IP_Binding_With_32.csv' or original list here."
     )
@@ -19,19 +19,16 @@ class AssignPrimaryIPs(Job):
         has_sensitive_variables = False
 
     def run(self, csv_file):
-        # Decode data stream cleanly
         file_data = csv_file.read().decode('utf-8-sig')
         reader = csv.DictReader(StringIO(file_data))
         
         self.logger.info("Initializing advanced mask alignment and primary mapping job...")
 
-        # Fetch active status reference safely from Nautobot Core
         status_active = Status.objects.get(name="Active")
         success_count = 0
         error_count = 0
 
         for row in reader:
-            # Dynamic header matching to support both your OLT and Router CSV files automatically
             device_name = row.get('interface__device__name') or row.get('device__name') or row.get('name') or row.get('Name')
             raw_ip = row.get('ip_address__host') or row.get('ip_address__address') or row.get('address') or row.get('IP')
             interface_name = row.get('interface__name') or row.get('interface') or 'Loopback'
@@ -39,11 +36,9 @@ class AssignPrimaryIPs(Job):
             if not device_name or not raw_ip:
                 continue
 
-            # Strip any incoming mask suffix to grab the raw IP host part
             ip_host = str(raw_ip).split('/')[0].strip()
             target_address = f"{ip_host}/32"
 
-            # 1. Fetch the Target Device
             try:
                 device = Device.objects.get(name=device_name)
             except Device.DoesNotExist:
@@ -51,7 +46,6 @@ class AssignPrimaryIPs(Job):
                 error_count += 1
                 continue
 
-            # 2. Fetch or create the Target Interface
             try:
                 interface_obj = Interface.objects.get(device=device, name=interface_name)
             except Interface.DoesNotExist:
@@ -61,43 +55,35 @@ class AssignPrimaryIPs(Job):
                     type="virtual",
                     status=status_active
                 )
-                self.logger.info(f"ℹ️ Created missing interface '{interface_name}' on device {device_name}")
 
-            # 3. Handle IP Address Database Alignment
             ip_obj = None
 
-            # Scenario A: The IP already exists correctly as a /32
             try:
                 ip_obj = IPAddress.objects.get(address=target_address)
             except IPAddress.DoesNotExist:
                 pass
 
-            # Scenario B: The IP exists but has an incorrect mask length (e.g., /24)
             if not ip_obj:
                 existing_ips = IPAddress.objects.filter(address__startswith=f"{ip_host}/")
                 if existing_ips.exists():
                     ip_obj = existing_ips.first()
                     old_address = ip_obj.address
-                    ip_obj.address = target_address  # Re-write mask in-place
+                    ip_obj.address = target_address
                     ip_obj.save()
-                    self.logger.warning(f"⚠️ Mask Aligned for {ip_host}: Updated {old_address} to {target_address} in database.")
+                    self.logger.warning(f"⚠️ Mask Aligned for {ip_host}: Updated {old_address} to {target_address}.")
 
-            # Scenario C: The IP does not exist at all in IPAM
             if not ip_obj:
                 ip_obj = IPAddress.objects.create(
                     address=target_address,
                     status=status_active
                 )
-                self.logger.info(f"✨ Created new IPAM record: {target_address}")
 
-            # 4. Bind the IP Address to the Device Interface Component
             try:
                 ip_obj.assigned_object = interface_obj
                 ip_obj.save()
             except Exception as e:
                 self.logger.error(f"⚠️ Interface link failure for {device_name}: {str(e)}")
 
-            # 5. Set the IP as Primary Management IP for the host
             try:
                 device.primary_ip4 = ip_obj
                 device.save()
@@ -107,4 +93,4 @@ class AssignPrimaryIPs(Job):
                 self.logger.error(f"❌ Primary update error for {device_name}: {str(e)}")
                 error_count += 1
 
-        self.logger.info(f"🎉 Process Complete! Successfully processed: {success_count} devices | Errors skipped: {error_count}")
+        self.logger.info(f"🎉 Process Complete! Success: {success_count} | Errors: {error_count}")
